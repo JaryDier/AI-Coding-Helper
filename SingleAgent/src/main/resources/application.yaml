@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: testAgent
+  ai:
+
+    ollama:
+      base-url: http://localhost:11434
+#      chat:
+#        model: qwen3.5:2b
+
+      embedding:
+        model: nomic-embed-text:v1.5
+
+    openai:
+      api-key: sk-425f39c7f8264f45970693c9bc2a58908a947a916f6963cb66007ef94dbb9f4c
+      chat:
+        options:
+          model: gpt-5.3-codex
+      base-url: https://api.dcha.top
+
+logging:
+  level:
+#    com.alibaba.cloud.ai: debug
+    com.hik.testagent: debug
+#    org.springframework.web: info
+server:
+  servlet:
+    encoding:
+      charset: utf-8
+      enabled: true

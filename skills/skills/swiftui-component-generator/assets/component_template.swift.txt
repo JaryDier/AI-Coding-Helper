@@ -1,0 +1,133 @@
+import SwiftUI
+
+public struct HzComponentName: View, FluentCopying {
+    // MARK: - Public Types
+
+    public enum Style: Hashable {
+        case primary
+        case secondary
+    }
+
+    // MARK: - Public Init
+
+    public init(
+        _ title: String,
+        action: @escaping () -> Void
+    ) {
+        self.init(
+            title: title,
+            style: .primary,
+            isEnabled: true,
+            action: action
+        )
+    }
+
+    // MARK: - Public View
+
+    public var body: some View {
+        Button(action: action) {
+            content
+        }
+        .disabled(!isEnabled)
+        .padding(.horizontal, SpacingTokens.large)
+        .padding(.vertical, SpacingTokens.small)
+        .foregroundStyle(foregroundColor)
+        .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: RadiusTokens.full, style: .continuous))
+        .opacity(isEnabled ? 1 : 0.4)
+    }
+
+    // MARK: - Public Chain API
+
+    public func style(_ style: Style) -> Self {
+        updating { $0.style = style }
+    }
+
+    public func enabled(_ isEnabled: Bool = true) -> Self {
+        updating { $0.isEnabled = isEnabled }
+    }
+
+    // MARK: - Private Storage
+
+    private let title: String
+    private var style: Style
+    private var isEnabled: Bool
+    private let action: () -> Void
+
+    // MARK: - Private Dependencies
+
+    @Environment(\.appTheme) private var theme
+
+    // MARK: - Private Helpers
+
+    private var content: some View {
+        Text(title)
+            .font(TypographyTokens.buttonMedium)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .multilineTextAlignment(.center)
+    }
+
+    private var foregroundColor: Color {
+        switch style {
+        case .primary:
+            return theme.colors.core.text.cTxtOnColor
+        case .secondary:
+            return theme.colors.core.text.cTxt
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch style {
+        case .primary:
+            return theme.colors.core.brand.cBrand
+        case .secondary:
+            return theme.colors.core.ctrl.cCtrl
+        }
+    }
+
+    private init(
+        title: String,
+        style: Style,
+        isEnabled: Bool,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.style = style
+        self.isEnabled = isEnabled
+        self.action = action
+    }
+
+}
+
+#Preview("Light") {
+    VStack(spacing: 12) {
+        HzComponentName("主操作") {}
+        HzComponentName("次级操作") {}
+            .style(.secondary)
+    }
+    .padding()
+    .appTheme(HzAppTheme())
+}
+
+#Preview("Dark") {
+    VStack(spacing: 12) {
+        HzComponentName("主操作") {}
+        HzComponentName("次级操作") {}
+            .style(.secondary)
+    }
+    .padding()
+    .appTheme(HzAppTheme())
+    .preferredColorScheme(.dark)
+}
+
+#Preview("RTL") {
+    VStack(spacing: 12) {
+        HzComponentName("主操作") {}
+        HzComponentName("次级操作") {}
+            .style(.secondary)
+    }
+    .padding()
+    .appTheme(HzAppTheme())
+    .environment(\.layoutDirection, .rightToLeft)
+}
