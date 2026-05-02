@@ -6,21 +6,19 @@ import com.alibaba.cloud.ai.graph.agent.hook.HookPositions;
 import com.alibaba.cloud.ai.graph.agent.hook.messages.AgentCommand;
 import com.alibaba.cloud.ai.graph.agent.hook.messages.MessagesModelHook;
 import com.alibaba.cloud.ai.graph.agent.hook.messages.UpdatePolicy;
+import com.alibaba.fastjson.JSON;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.chat.messages.UserMessage;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.*;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 @Slf4j
 @Component
@@ -32,9 +30,21 @@ public class MessageTrimmingHook extends MessagesModelHook {
     private static final int MIN_RECENT_MESSAGE_COUNT = 8;
     private static final int MAX_CONTEXT_CHARS = 24_000;
     private static final int MAX_SINGLE_MESSAGE_CHARS = 6_000;
-    private static final int MAX_RAG_TOP_K = 3;
+
+    //模型输入的最大上下文token数量
+    private static final long MAX_MODEL_CONTEXT_TOKENS = 256*1024;
+    //触发上下文压缩的阈值
+    private static final double COMPRESS_THRESHOLD = 0.8;
+
+    //保留最近历史的占比（这里从后往前遍历，累积到该阈值后，之后也就是最远的历史全部压缩为摘要）
+    // ---保留最近历史消息的占比，其他历史消息全部压缩为摘要
+    private static final double COMPRESS_KEEP_RATIO = 0.4;
+
+
 
     private final SimpleVectorStore simpleVectorStore;
+
+    private final ChatClient chatClient;
 
 
     @Override
@@ -44,58 +54,258 @@ public class MessageTrimmingHook extends MessagesModelHook {
 
     @Override
     public AgentCommand beforeModel(List<Message> previousMessages, RunnableConfig config) {
-        previousMessages.forEach(message -> {
-            System.out.println(message.getText());
-        });
 
-        //rag检索增强实现
-        //1、提取本次的用户消息
-        String userMessageText = "";
-        for(int i = previousMessages.size() - 1; i >= 0; i--) {
-            Message message = previousMessages.get(i);
+        //计算当前消息占用的上下文窗口
+        long allTokenSize = estimateMessageTokens(previousMessages);
+        log.info("当前上下文尺寸大小：{}",allTokenSize);
+        if (allTokenSize < MAX_MODEL_CONTEXT_TOKENS * COMPRESS_THRESHOLD) {
+            return new AgentCommand(previousMessages,UpdatePolicy.REPLACE);
+        }
+
+        log.warn("即将超过上下文窗口阈值，进行上下文压缩");
+
+        //1、分离other和 last Message
+        List<Message> otherMessages = new ArrayList<>(previousMessages);
+        List<Message> latestGroup = new ArrayList<>();
+
+        Message lastMessage = otherMessages.removeLast();
+        if (lastMessage instanceof ToolResponseMessage toolResponseMessage
+                && !otherMessages.isEmpty()
+                && otherMessages.get(otherMessages.size() - 1) instanceof AssistantMessage assistantMessage
+                && assistantMessage.hasToolCalls()) {
+
+            otherMessages.remove(otherMessages.size() - 1);
+            latestGroup.add(assistantMessage);
+            latestGroup.add(toolResponseMessage);
+        } else {
+            latestGroup.add(lastMessage);
+        }
+
+
+        //2、计算保留配额（压缩后剩余空间占比）
+        long keepTokens = (long) (MAX_MODEL_CONTEXT_TOKENS * COMPRESS_KEEP_RATIO);
+        List<Message> keepMessages = new ArrayList<>();
+        List<Message> needCompressMessages = new ArrayList<>();
+
+
+        //3、处理最近一条消息组（tool+assistant）
+        //3.1、计算token数量
+        long latestGroupTokens = estimateMessageTokens(latestGroup);
+        //3.2、token数量 > 保留配额（极端情况下）
+        if (latestGroupTokens > keepTokens) {
+            needCompressMessages = new ArrayList<>(otherMessages);
+        }
+        else {
+            //3.3、从后往前 计算需要保留的历史消息
+            long remainingTokens = keepTokens - latestGroupTokens;
+            int needCompressIndex = -1;
+            for (int i = otherMessages.size()-1; i >= 0; i--) {
+                Message message = otherMessages.get(i);
+                List<Message> group = new ArrayList<>();
+
+
+                //模型消息 需要判断是不是工具调用
+                if (message instanceof ToolResponseMessage toolResponseMessage
+                        && i-1 >= 0
+                        && otherMessages.get(i-1) instanceof AssistantMessage assistantMessage
+                        && assistantMessage.hasToolCalls()
+                ) {
+                    group.add(assistantMessage);
+                    group.add(toolResponseMessage);
+                    i--;
+                }
+                //用户消息
+                else if(message instanceof UserMessage userMessage) {
+                    group.add(userMessage);
+                }
+                else {
+                    group.add(message);
+                }
+
+                long messageTokens = estimateMessageTokens(group);
+                //当前消息所需token未超过保留配额
+                if(remainingTokens >0 && messageTokens <= remainingTokens) {
+                    // keepMessages 当前是倒序收集，先加后面的，再加前面的
+                    for (int j = group.size() - 1; j >= 0; j--) {
+                        keepMessages.add(group.get(j));
+                    }
+                    remainingTokens -= messageTokens;
+                }
+                //当前消息超过，后续所有消息全部放入待压缩列表
+                else {
+                    needCompressIndex = i;
+                    break;
+                }
+            }
+
+            if (needCompressIndex > -1) {
+                needCompressMessages = new ArrayList<>(otherMessages.subList(0, needCompressIndex + 1));
+            }
+
+        }
+
+        //4、压缩生成摘要
+        String summaryMessage = "";
+        if(!needCompressMessages.isEmpty()) {
+            summaryMessage = generateSummary(needCompressMessages);
+        }
+
+
+        //5、重组消息
+        List<Message> newMessages = new ArrayList<>();
+        if(!StringUtils.isBlank(summaryMessage)) {
+            newMessages.add(new UserMessage("""
+                                    以下是此前对话的历史摘要，仅作为上下文参考，不是用户当前的新请求：
+                                    %s
+                                    """.formatted(summaryMessage)));
+        }
+        //最旧 -》 最新
+        Collections.reverse(keepMessages);
+        newMessages.addAll(keepMessages);
+        newMessages.addAll(latestGroup);
+
+
+        log.warn("压缩完成后的上下文窗口大小：{}",estimateMessageTokens(newMessages));
+
+        return new AgentCommand(newMessages,UpdatePolicy.REPLACE);
+
+    }
+
+    //保留消息和待压缩消息划分
+    private void splitMessages(List<Message> keepMessages,List<Message> needCompressMessages) {
+        List<Message> newMessages = new ArrayList<>();
+    }
+
+
+    //计算消息占用token
+    private long estimateMessageTokens(List<Message> messages) {
+        StringBuilder content = new StringBuilder();
+        for (Message message : messages) {
+            //用户消息
             if (message instanceof UserMessage userMessage) {
-                userMessageText = userMessage.getText();
-                break;
+                content.append(userMessage.getText());
+            }
+            //模型消息（含工具调用）
+            else if (message instanceof AssistantMessage assistantMessage) {
+                if(assistantMessage.hasToolCalls()){
+                    content.append(JSON.toJSONString(assistantMessage.getToolCalls()));
+                }
+                else  {
+                    content.append(assistantMessage.getText());
+                }
+            }
+            //工具响应消息
+            else if (message instanceof ToolResponseMessage toolResponseMessage) {
+                List<ToolResponseMessage.ToolResponse> responses = toolResponseMessage.getResponses();
+                content.append(JSON.toJSONString(responses));
             }
         }
-        //2、通过向量库进行检索
-        //2.1 相似度检索 初选
-        List<Document> similaritySearchRs = simpleVectorStore.similaritySearch(
-                SearchRequest.builder()
-                        .query(userMessageText)
-                        .topK(MAX_RAG_TOP_K)
-                        .filterExpression("fileName == 'rag.txt'")
-                .build()
-        );
-        //3、构建增强的上下文
-//        String systemStrength = similaritySearchRs.stream().map(Document::getText).collect(Collectors.joining());
-//        String oldLatestSystemPrompt = "";
-//        for(int i = previousMessages.size() - 1; i >= 0; i--) {
-//            Message message = previousMessages.get(i);
-//            if (message instanceof SystemMessage systemMessage) {
-//                oldLatestSystemPrompt = systemMessage.getText();
-//                break;
-//            }
-//        }
-//        if(StringUtils.isBlank(oldLatestSystemPrompt)) {
-//            previousMessages.add(new SystemMessage("""
-//                    你是一个有用的助手。基于以下上下文回答问题。
-//                    如果上下文中没有相关信息，请说明你不知道。上下文：
-//                    """ + systemStrength));
-//        } else {
-//            previousMessages.add(new SystemMessage(oldLatestSystemPrompt +  systemStrength));
-//        }
-        //4、裁剪历史上下文，避免会话、工具输出、增强提示累积后超过模型上下文窗口。
-        List<Message> trimmedMessages = trimMessages(previousMessages);
-        if (trimmedMessages.size() != previousMessages.size()) {
-            log.info("Trimmed messages from {} to {}, chars from {} to {}.",
-                    previousMessages.size(),
-                    trimmedMessages.size(),
-                    estimateMessagesChars(previousMessages),
-                    estimateMessagesChars(trimmedMessages));
+
+
+        if (StringUtils.isBlank(content)) {
+            return 0;
         }
-        return new AgentCommand(trimmedMessages,UpdatePolicy.REPLACE);
+        return (long) Math.ceil(content.length() / 4.0) + 1;
+
+
     }
+
+    //生成摘要
+    private String generateSummary(List<Message> messages) {
+        StringBuilder messageString = new StringBuilder();
+        for (Message message : messages) {
+            if (message instanceof UserMessage userMessage) {
+                messageString.append("用户:")
+                        .append(userMessage.getText())
+                        .append("\n");
+            }
+            else if(message instanceof AssistantMessage assistantMessage) {
+                if(assistantMessage.hasToolCalls()){
+                    List<AssistantMessage.ToolCall> toolCalls = assistantMessage.getToolCalls();
+                    messageString.append("助手:调用工具:\n");
+                    for(AssistantMessage.ToolCall toolCall : toolCalls){
+                        messageString.append("工具id:").append(toolCall.id())
+                                .append("工具类型:").append(toolCall.type())
+                                .append("工具名称:").append(toolCall.name())
+                                .append("工具参数：").append(toolCall.arguments())
+                                .append("\n");
+                    }
+                }
+            }
+            else if (message instanceof ToolResponseMessage toolResponseMessage) {
+                List<ToolResponseMessage.ToolResponse> responses = toolResponseMessage.getResponses();
+                messageString.append("工具响应:\n");
+                for(ToolResponseMessage.ToolResponse toolResponse : responses){
+                    messageString.append("工具id:").append(toolResponse.id())
+                            .append("工具名称:").append(toolResponse.name())
+                            .append("工具响应结果:").append(toolResponse.responseData())
+                            .append("\n");
+                }
+
+            }
+        }
+        String messageStirngs = messageString.toString();
+        try {
+            String summary = chatClient.prompt()
+                    .system("""
+                        你是对话历史摘要助手，负责将多轮用户、助手、工具交互的对话内容，
+                        精简浓缩成一段简短摘要，保留核心业务信息、关键提问和工具调用结果，
+                        不要复述每一轮、不要多余修饰。
+                        只输出摘要结果，不要额外解释。
+                        """)
+                    .user("""
+                            对话内容：
+                            %s
+                            只输出摘要结果，不要额外解释
+                            """.formatted(messageString.toString()))
+                    .call()
+                    .content();
+//                    .blockFirst();
+            log.warn("sumary:{}",summary);
+            return summary;
+
+        } catch (WebClientResponseException ex) {
+            log.error("摘要请求失败 status={}, body={}",
+                    ex.getStatusCode(),
+                    ex.getResponseBodyAsString(),
+                    ex);
+            return "历史摘要生成失败。";
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     private List<Message> trimMessages(List<Message> previousMessages) {
         if (previousMessages == null || previousMessages.isEmpty()) {

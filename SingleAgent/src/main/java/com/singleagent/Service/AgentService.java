@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.action.InterruptionMetadata;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
+import com.alibaba.cloud.ai.graph.store.stores.MemoryStore;
 import com.alibaba.fastjson.JSON;
 import com.singleagent.Controller.Request.AgentApprovalRequest;
 import com.singleagent.Controller.Request.AgentChatRequest;
@@ -18,6 +19,9 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+
+import java.util.Map;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -42,7 +46,9 @@ public class AgentService {
         }
         RunnableConfig runnableConfig = RunnableConfig.builder()
                 .threadId(chatRequest.getThreadId())
+                .store(new MemoryStore())
                 .addMetadata(StateConstant.CONVERSATION_ID,chatRequest.getConversationId())
+                .addMetadata(StateConstant.SKIP_USER_PROMPT_ENHANCE,false)
                 .build();
         return runAgentRound(
                 chatRequest.getContent(),
@@ -60,39 +66,65 @@ public class AgentService {
         log.info("第 {} 次",round);
         RoundTrace trace = new RoundTrace();
 
+
+        //后续递归轮次 不再需要用户消息增强
+        RunnableConfig newRunnableConfig = RunnableConfig.builder(runnableConfig)
+                .addMetadata(StateConstant.SKIP_USER_PROMPT_ENHANCE, round > 0)
+                .build();
+
         try {
-            return singleAgent.stream(currentInput,runnableConfig)
+            Flux<String> roundStream = singleAgent.stream(currentInput, newRunnableConfig)
                     .doOnNext(trace::record)
                     .map(MessageResolver::messageResolve)
-                    .filter(StringUtils::isNotBlank)
-                    .collectList()
-                    .flatMapMany(outputs -> {
-                        String roundOutput = String.join("",outputs);
+                    .filter(StringUtils::isNotBlank);
 
-                        String enhanceOriginalInput = MemoryHelperUtil.normalizeUserTask.get(StateConstant.CONVERSATION_ID);
+            return roundStream.publish(stringFlux -> Flux.merge(
+                    stringFlux,
+                    stringFlux.collectList()
+                            .flatMapMany(outputs -> {
+                                String roundOutput = String.join("",outputs);
 
-                        //判断本次返回是否完成用户需求
-                        CompletionJudgeResult judgeResult = judgeCompletionByChatClient(enhanceOriginalInput, roundOutput, trace);
-                        if(judgeResult.isCompleted()) {
-                            log.debug("成功完成需求{}",roundOutput);
-                            //完成 返回
-                            return Flux.just(roundOutput);
-                        }
+                                //原始输入变为增强后的
+                                String conversationId = newRunnableConfig.metadata(StateConstant.CONVERSATION_ID)
+                                        .map(Object::toString)
+                                        .orElseThrow(() -> new IllegalArgumentException("conversationId is empty"));
 
-                        //超过最大次数，直接返回
-                        if(round >= MAX_LOOP_COUNT){
-                            log.error("超过最大循环轮次还依然没有执行完需求:roundOutput->{}\n,next_instruction->{}",roundOutput,judgeResult.getNext_instruction());
-                            return Flux.fromIterable(outputs)
-                                    .concatWith(Flux.just("""
+                                String enhanceOriginalInput = MemoryHelperUtil.normalizeUserTask.get(conversationId);
+                                if (StringUtils.isBlank(enhanceOriginalInput)) {
+                                    enhanceOriginalInput = currentInput;
+                                }
+
+                                //判断本次返回是否完成用户需求
+                                CompletionJudgeResult judgeResult = judgeCompletionByChatClient(enhanceOriginalInput, roundOutput, trace);
+                                if(judgeResult.isCompleted()) {
+                                    log.debug("成功完成需求{}",roundOutput);
+                                    //清理normalizeUserTask列表
+                                    MemoryHelperUtil.normalizeUserTask.remove(conversationId);
+                                    //完成 返回
+                                    return Flux.empty();
+                                }
+
+                                //超过最大次数，直接返回
+                                if(round + 1 >= MAX_LOOP_COUNT){
+                                    log.error("超过最大循环轮次还依然没有执行完需求:roundOutput->{}\n,next_instruction->{}",roundOutput,judgeResult.getNext_instruction());
+
+                                    //清理normalizeUserTask列表
+                                    MemoryHelperUtil.normalizeUserTask.remove(conversationId);
+
+                                    return Flux.just("""
                                     已达到最大自动执行轮次，自动继续已停止。
                                     未完成原因或下一步建议：%s
-                                    """.formatted(judgeResult.getNext_instruction())));
-                        }
-                        log.info("目前完成部分：output -> {}\\n,接下来需要做的next_instruction -> {}",roundOutput,judgeResult.getNext_instruction());
-                        //未完成 构建新的用户消息 再次请求
-                        String nextUserInput = buildContinuePrompt(enhanceOriginalInput,judgeResult.getNext_instruction(),trace);
-                        return runAgentRound(nextUserInput,runnableConfig,round+1);
-                    });
+                                    """.formatted(judgeResult.getNext_instruction()));
+                                }
+                                log.info("目前完成部分：output -> {}\\n,接下来需要做的next_instruction -> {}",roundOutput,judgeResult.getNext_instruction());
+                                //未完成 构建新的用户消息 再次请求
+                                String nextUserInput = buildContinuePrompt(enhanceOriginalInput,judgeResult.getNext_instruction(),trace);
+                                return runAgentRound(nextUserInput, newRunnableConfig, round + 1);
+                            })
+                            .doOnError(e -> newRunnableConfig.metadata(StateConstant.CONVERSATION_ID)
+                                    .map(Object::toString)
+                                    .ifPresent(MemoryHelperUtil.normalizeUserTask::remove))
+            ));
         } catch (GraphRunnerException e) {
             throw new RuntimeException(e);
         }
@@ -101,15 +133,15 @@ public class AgentService {
     private CompletionJudgeResult judgeCompletionByChatClient(String enhanceOriginalInput,String currentRoundOutput,RoundTrace trace) {
         String resultJson = chatClient.prompt()
                 .system(
-                        """
-                                你是任务完成度判断器。只输出JSON，不要解释。
-                                格式：{"completed":true|false,"next_instruction":"不超过80字"}
-                                规则：
-                                1. 输出只是计划/建议/询问继续，completed=false。
-                                2. 用户要求真实操作但未调用工具，completed=false。
-                                3. 用户要求代码修改但无验证结果，completed=false。
-                                4. 已明确完成或已向用户询问必要阻塞信息，completed=true。
-                                """
+                    """
+                            你是任务完成度判断器。只输出JSON，不要解释。
+                            格式：{"completed":true|false,"next_instruction":"不超过80字"}
+                            规则：
+                            1. 输出只是计划/建议/询问继续，completed=false。
+                            2. 用户要求真实操作但未调用工具，completed=false。
+                            3. 用户要求代码修改但无验证结果，completed=false。
+                            4. 已明确完成或已向用户询问必要阻塞信息，completed=true。
+                            """
                 )
                 .user(
                         """
@@ -133,8 +165,25 @@ public class AgentService {
                 .collectList()
                 .map(list -> String.join("",list))
                 .block();
-        return JSON.parseObject(resultJson, CompletionJudgeResult.class);
 
+        try {
+            CompletionJudgeResult result = JSON.parseObject(resultJson, CompletionJudgeResult.class);
+            if (result == null) {
+                log.warn("完成度判断失败，请继续推进下一步");
+                return defaultUncompleted("完成度判断失败，请根据原始需求继续推进");
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("完成度判断JSON解析失败: {}", resultJson, e);
+            return defaultUncompleted("完成度判断JSON解析失败，请根据原始需求继续推进");
+        }
+
+    }
+    private CompletionJudgeResult defaultUncompleted(String nextInstruction) {
+        CompletionJudgeResult result = new CompletionJudgeResult();
+        result.setCompleted(false);
+        result.setNext_instruction(nextInstruction);
+        return result;
     }
 
     //构建下一轮用户输入

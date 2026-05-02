@@ -40,6 +40,13 @@ public class UserPromptEnhanceAgentHook extends AgentHook {
 
     @Override
     public CompletableFuture<Map<String, Object>> beforeAgent(OverAllState state, RunnableConfig config) {
+
+        boolean isSkipEnhanceMessage = Boolean.TRUE.equals(
+                config.metadata(StateConstant.SKIP_USER_PROMPT_ENHANCE).orElse(false));
+        if (isSkipEnhanceMessage) {
+            return CompletableFuture.completedFuture(Map.of());
+        }
+
         //1、获取最近一条userMessage
         List<Message> messages = (List<Message>) state.value("messages").orElse(null);
         if(messages == null || messages.isEmpty()) {
@@ -70,6 +77,7 @@ public class UserPromptEnhanceAgentHook extends AgentHook {
         Optional<Object> conversationIdOpt = config.metadata(StateConstant.CONVERSATION_ID);
         if(conversationIdOpt.isEmpty()) {
             log.error("CONVERSATION_ID is empty");
+            throw new IllegalArgumentException("conversationId is empty");
         }
         String conversationId = (String) conversationIdOpt.get();
         MemoryHelperUtil.normalizeUserTask.put(conversationId,enhanceUserInput);

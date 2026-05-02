@@ -22,6 +22,7 @@ logging:
   level:
 #    com.alibaba.cloud.ai: debug
     com.hik.testagent: debug
+    com.singleagent: debug
 #    org.springframework.web: info
 server:
   servlet:
