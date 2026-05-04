@@ -32,12 +32,14 @@ public class EmbeddingConfig {
         TextReader textReader = new TextReader(resource);
         List<Document> originalDocuments = textReader.read();
         //2、转换文档 以适应模型上下文窗口
+        //2.1、构建文档转换器
         TokenTextSplitter splitter = TokenTextSplitter.builder()
                 .withChunkSize(500)
                 .withMinChunkLengthToEmbed(10)
                 .withMaxNumChunks(1000)
                 .withKeepSeparator(true)
                 .build();
+        //2.2、文档转换
         List<Document> transferDocuments = splitter.split(originalDocuments).stream().map(document -> {
             Map<String, Object> metadata = document.getMetadata();
             metadata.put("fileName", resource.getFilename());

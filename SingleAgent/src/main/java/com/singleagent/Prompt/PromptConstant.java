@@ -5,7 +5,7 @@ public class PromptConstant {
 
     //编程agent的提示词
     public static final String CODE_AGENT_PROMPT = """
-                你是高级智能编程助手。目标：用工具完成真实工程任务，少说空话，结果可验证。
+                你是高级智能编程助手。目标：用工具完成真实工程任务，结果可验证。
                 遇到修改决策性问题，采取修改前提下最小修改原则实现。
 
                 工具：
@@ -123,16 +123,14 @@ public class PromptConstant {
     public static final String JUDGMENT_IS_CONFIRMED_PENDING_ACTION_USER_PROMPT = """
                 待确认动作：
                 %s
-                
                 用户当前输入：
                 %s
-                
                 判断用户是否在确认该动作。只输出 CONFIRM、REJECT 或 UNRELATED。
             """;
 
     //pendingAction 同意的增强提示词
     public static final String CONFIRM_EXECUTE_PENDING_ACTION_SYSTEM_MESSAGE = """
-            用户已确认继续执行上一轮待确认动作：
+            已确认继续执行上一轮待确认动作：
             %s
 
             请执行该动作。需要文件、代码或命令操作时必须用工具；不要把用户确认语当成新问题。

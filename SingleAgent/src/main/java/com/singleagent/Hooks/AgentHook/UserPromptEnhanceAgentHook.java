@@ -6,6 +6,8 @@ import com.alibaba.cloud.ai.graph.agent.hook.AgentHook;
 import com.alibaba.cloud.ai.graph.agent.hook.HookPosition;
 import com.alibaba.cloud.ai.graph.agent.hook.HookPositions;
 import com.alibaba.cloud.ai.graph.state.ReplaceAllWith;
+import com.alibaba.cloud.ai.graph.store.Store;
+import com.alibaba.cloud.ai.graph.store.StoreItem;
 import com.singleagent.Prompt.PromptConstant;
 import com.singleagent.Util.MemoryHelperUtil;
 import com.singleagent.Util.StateConstant;

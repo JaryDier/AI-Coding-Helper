@@ -2,12 +2,8 @@ spring:
   application:
     name: testAgent
   ai:
-
     ollama:
       base-url: http://localhost:11434
-#      chat:
-#        model: qwen3.5:2b
-
       embedding:
         model: nomic-embed-text:v1.5
 
@@ -29,3 +25,7 @@ server:
     encoding:
       charset: utf-8
       enabled: true
+
+skills:
+  upload:
+    path: F:\javaLearn\AI\Skills\

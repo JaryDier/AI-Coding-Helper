@@ -8,6 +8,7 @@ import com.alibaba.cloud.ai.graph.agent.hook.hip.HumanInTheLoopHook;
 import com.alibaba.cloud.ai.graph.agent.hook.shelltool.ShellToolAgentHook;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.alibaba.cloud.ai.graph.agent.tools.ShellTool2;
+import com.alibaba.cloud.ai.graph.checkpoint.Checkpoint;
 import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry;
 import com.singleagent.Hooks.AgentHook.PendingActionDealHook;
@@ -38,6 +39,9 @@ public class AgentConfig {
 
 
     public  record WeatherRequest(String city){}
+
+    //人工介入永远不会发生在工具执行过程中
+    //它永远发生在思考节点执行完成后
 
     @Bean
     public SkillsAgentHook skillsAgentHook() {
@@ -567,6 +571,19 @@ public class AgentConfig {
             ) {
 
         ToolCallback pythonToolCallback = PythonTool.createPythonToolCallback(PythonTool.DESCRIPTION);
+
+//        人工介入永远不会发生在工具执行过程中
+//                它永远发生在思考节点执行完成后
+//        也就是说：
+//        工具节点一旦开始执行，就会一口气跑完所有工具
+//        跑完后保存 Checkpoint
+//        然后回到思考节点
+//        思考节点判断需要人工介入 → 保存 Checkpoint → 暂停等待
+//        为什么这样设计？
+//        因为工具执行是原子性的，不能中断。如果工具执行到一半中断，会产生脏数据。
+
+
+
         return ReactAgent.builder()
                 .name("code_review_agent")
                 .model(openAiChatModel)
