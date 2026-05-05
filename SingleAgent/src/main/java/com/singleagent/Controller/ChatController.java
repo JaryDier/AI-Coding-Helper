@@ -4,6 +4,7 @@ import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.singleagent.Controller.Request.AgentApprovalRequest;
 import com.singleagent.Controller.Request.AgentChatRequest;
 import com.singleagent.Service.AgentService;
+import com.singleagent.Service.MultiAgentOrchestrationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -16,10 +17,16 @@ import reactor.core.publisher.Flux;
 public class ChatController {
 
     private final AgentService agentService;
+    private final MultiAgentOrchestrationService multiAgentOrchestrationService;
 
     @PostMapping("/chatStream")
     public Flux<String> chatStream(@RequestBody AgentChatRequest agentChatRequest) throws GraphRunnerException {
         return agentService.streamChat(agentChatRequest);
+    }
+
+    @PostMapping("/multiAgent/chatStream")
+    public Flux<String> multiAgentChatStream(@RequestBody AgentChatRequest agentChatRequest) {
+        return multiAgentOrchestrationService.streamChat(agentChatRequest);
     }
 
     @PostMapping("/approval")
