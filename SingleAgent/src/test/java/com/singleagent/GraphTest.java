@@ -74,7 +74,7 @@ public class GraphTest {
 
         log.warn("基于历史状态创建新分支------------------------------------------------");
         RunnableConfig newRunnableConfig = RunnableConfig.builder()
-                .checkPointId(stateHistory.getLast().config().checkPointId().orElse("N/A"))
+                .checkPointId(stateHistory.getFirst().config().checkPointId().orElse("N/A"))
                 .threadId("2")
                 .build();
         compiledGraph.stream(

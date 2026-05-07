@@ -571,8 +571,8 @@ public class AgentConfig {
                 ) //shell工具注入Hook
                 .tools(pythonToolCallback)
                 .methodTools(fileOperationTool,shellOperationTool,codeUpdateTool)
-                .saver(new MemorySaver())
-                .outputKey("testing")
+//                .saver(new MemorySaver())
+//                .outputKey("testing")
                 .build();
     }
 }
