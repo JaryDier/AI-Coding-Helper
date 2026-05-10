@@ -246,7 +246,7 @@ public class MessageTrimmingHook extends MessagesModelHook {
         }
         String messageStirngs = messageString.toString();
         try {
-            String summary = chatClient.prompt()
+            List<String> summaryChunks = chatClient.prompt()
                     .system("""
                         你是对话历史摘要助手，负责将多轮用户、助手、工具交互的对话内容，
                         精简浓缩成一段简短摘要，保留核心业务信息、关键提问和工具调用结果，
@@ -258,9 +258,11 @@ public class MessageTrimmingHook extends MessagesModelHook {
                             %s
                             只输出摘要结果，不要额外解释
                             """.formatted(messageString.toString()))
-                    .call()
-                    .content();
-//                    .blockFirst();
+                    .stream()
+                    .content()
+                    .collectList()
+                    .block();
+            String summary = summaryChunks == null ? "" : String.join("", summaryChunks);
             log.warn("sumary:{}",summary);
             return summary;
 

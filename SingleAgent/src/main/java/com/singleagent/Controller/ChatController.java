@@ -21,13 +21,13 @@ public class ChatController {
 
     @PostMapping("/chatStream")
     public Flux<String> chatStream(@RequestBody AgentChatRequest agentChatRequest) throws GraphRunnerException {
-        return agentService.streamChat(agentChatRequest);
+        return agentService.streamChat2(agentChatRequest);
     }
 
-    @PostMapping("/multiAgent/chatStream")
-    public Flux<String> multiAgentChatStream(@RequestBody AgentChatRequest agentChatRequest) {
-        return multiAgentOrchestrationService.streamChat(agentChatRequest);
-    }
+//    @PostMapping("/multiAgent/chatStream")
+//    public Flux<String> multiAgentChatStream(@RequestBody AgentChatRequest agentChatRequest) {
+//        return multiAgentOrchestrationService.streamChat(agentChatRequest);
+//    }
 
     @PostMapping("/approval")
     public Flux<String> approval(@RequestBody AgentApprovalRequest agentApprovalRequest) throws GraphRunnerException {

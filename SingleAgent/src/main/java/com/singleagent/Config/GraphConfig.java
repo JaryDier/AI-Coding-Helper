@@ -73,7 +73,7 @@ public class GraphConfig {
                     .map(Integer::parseInt)
                     .orElse(0);
 
-            String content = chatClient.prompt()
+            List<String> supervisorChunks = chatClient.prompt()
                     .system("""
                             你是代码任务监督节点，只负责判断 singleAgent 本轮输出是否已经真正完成用户的代码任务。
                             你不能继续执行任务，不能写代码，不能输出 Markdown，只能输出严格 JSON。
@@ -92,7 +92,8 @@ public class GraphConfig {
                             4. 如果工具执行失败，且还有明确修复方向，status=CONTINUE。
                             5. 如果缺少用户必须补充的信息，assistant 已经明确向用户提问，status=END。
                             6. 如果已经完成真实操作、验证通过，或已经给出不能继续的明确原因，status=END。
-                            7. next_instruction 必须具体、可执行，不要写泛泛的“继续完成任务”。
+                            7. 如果在验证后确定不是代码逻辑错误，而是由于不可解决的环境问题，status=END。
+                            8. next_instruction 必须具体、可执行，不要写泛泛的“继续完成任务”。
                             """)
                     .user("""
                             当前监督循环次数：
@@ -118,8 +119,11 @@ public class GraphConfig {
                             StringUtils.defaultString(latestAssistantText),
                             recentConversation
                     ))
-                    .call()
-                    .content();
+                    .stream()
+                    .content()
+                    .collectList()
+                    .block();
+            String content = supervisorChunks == null ? "" : String.join("", supervisorChunks);
 
             JSONObject supervisorResult = parseSupervisorResult(content);
             if (loopCount + 1 >= MAX_SUPERVISOR_LOOP_COUNT

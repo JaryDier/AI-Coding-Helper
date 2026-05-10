@@ -1,5 +1,7 @@
 package com.singleagent.Service;
 
+import com.alibaba.cloud.ai.graph.CompiledGraph;
+import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.action.InterruptionMetadata;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
@@ -17,9 +19,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -32,7 +36,34 @@ public class AgentService {
 
     private final ChatClient chatClient;
 
+    private final CompiledGraph codeGraph;
+
     private static final Integer MAX_LOOP_COUNT = 5;
+
+    //流式对话
+    public Flux<String> streamChat2(AgentChatRequest chatRequest) throws GraphRunnerException {
+        if(chatRequest == null || StringUtils.isBlank(chatRequest.getContent())){
+            return Flux.empty();
+        }
+        if (StringUtils.isBlank(chatRequest.getThreadId()) || StringUtils.isBlank(chatRequest.getConversationId())) {
+            return Flux.just("参数thread、conversationId 不能为空");
+        }
+        RunnableConfig runnableConfig = RunnableConfig.builder()
+                .threadId(chatRequest.getThreadId())
+                .addMetadata(StateConstant.CONVERSATION_ID, chatRequest.getConversationId())
+                .addMetadata(StateConstant.SKIP_USER_PROMPT_ENHANCE, false)
+                .build();
+
+        Flux<NodeOutput> stream = codeGraph.stream(Map.of(
+                        "input", chatRequest.getContent(),
+                        "messages", List.of(new UserMessage(chatRequest.getContent()))),
+                runnableConfig);
+
+
+        return stream.map(MessageResolver::messageResolve)
+                .filter(StringUtils::isNotBlank);
+    }
+
 
 
 

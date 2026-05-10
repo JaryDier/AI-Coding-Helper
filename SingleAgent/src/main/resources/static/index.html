@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Coding Helper</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="会话设置">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">AI</div>
+        <div>
+          <h1>AI Coding Helper</h1>
+          <p>后端 Agent 聊天工作台</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <div class="panel-title">会话</div>
+        <label class="field">
+          <span>Thread ID</span>
+          <input id="threadId" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Conversation ID</span>
+          <input id="conversationId" autocomplete="off" />
+        </label>
+        <div class="button-row">
+          <button id="newSessionBtn" class="secondary-btn" type="button">新会话</button>
+          <button id="clearBtn" class="ghost-btn" type="button">清空</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Skill 上传</div>
+        <form id="skillUploadForm" class="upload-form">
+          <label class="file-picker" for="skillZipInput">
+            <span class="file-picker-icon" aria-hidden="true">ZIP</span>
+            <span id="skillFileName" class="file-picker-text">选择 skill 压缩包</span>
+          </label>
+          <input id="skillZipInput" class="sr-only" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
+          <button id="skillUploadBtn" class="secondary-btn" type="submit" disabled>上传 Skill</button>
+          <div id="skillUploadStatus" class="upload-status" aria-live="polite">仅支持 .zip 文件</div>
+        </form>
+      </section>
+
+      <section class="panel compact-panel">
+        <div class="panel-title">状态</div>
+        <div class="status-line">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusText">就绪</span>
+        </div>
+        <div class="meta-list">
+          <div>
+            <span>接口</span>
+            <strong>/agent/chatStream</strong>
+          </div>
+          <div>
+            <span>模式</span>
+            <strong>流式响应</strong>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <main class="chat-area">
+      <header class="chat-header">
+        <div>
+          <h2>代码助手对话</h2>
+          <p>输入需求后，Agent 会通过当前后端接口持续返回结果。</p>
+        </div>
+        <button id="stopBtn" class="stop-btn" type="button" disabled>停止</button>
+      </header>
+
+      <section id="messages" class="messages" aria-live="polite" aria-label="聊天消息">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon" aria-hidden="true">{ }</div>
+          <h3>开始一次开发对话</h3>
+          <p>可以让它分析项目、生成代码、解释报错，或继续推进一个具体实现。</p>
+        </div>
+      </section>
+
+      <form id="chatForm" class="composer">
+        <label class="sr-only" for="promptInput">消息内容</label>
+        <textarea id="promptInput" rows="1" placeholder="描述你想让 Agent 完成的任务..." required></textarea>
+        <button id="sendBtn" class="send-btn" type="submit">发送</button>
+      </form>
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
